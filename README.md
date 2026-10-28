@@ -4,7 +4,8 @@ Low-cost, open-source **T12 soldering station** firmware for the **Puya PY32F002
 
 This repository contains the complete firmware, a minimal PY32 LL/CMSIS vendor tree, build/flash tooling, and replication notes. It is a port of the original [ATmega-Soldering-Station](https://github.com/wagiminator/ATmega-Soldering-Station) firmware to the PY32F002A.
 
-- Board project: [OSHWLab](https://oshwlab.com/dhruvgoel3829/project_wyxcfekm)
+- Hardware design files (schematic, PCB, BOM, Gerbers): [OSHWLab project](https://oshwlab.com/dhruvgoel3829/project_wyxcfekm)
+- Firmware repository: [github.com/Dhruvgoel3829/py32-t12-controller](https://github.com/Dhruvgoel3829/py32-t12-controller)
 - Predecessor: [Solder_Station](https://github.com/Dhruvgoel3829/Solder_Station) (Arduino Nano version)
 - License: [MIT](LICENSE) for this repository; see [CREDITS.md](CREDITS.md) for upstream notices
 
@@ -23,6 +24,8 @@ This repository contains the complete firmware, a minimal PY32 LL/CMSIS vendor t
 - Diagnostic ADC raw-value screen
 
 ## Hardware
+
+The board is published on OSHWLab: <https://oshwlab.com/dhruvgoel3829/project_wyxcfekm>
 
 | Block | Part / description |
 |---|---|
