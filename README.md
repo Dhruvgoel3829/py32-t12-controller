@@ -1,94 +1,161 @@
-# py32-t12-controller
+# PY32 T12 Soldering Controller
 
-Low-cost PY32F002A-based PID controller for **T12 soldering iron tips**, with an SSD1306 OLED and 24 V operation.
+Low-cost, open-source **T12 soldering station** firmware for the **Puya PY32F002A** (Cortex-M0+), with an SSD1306 OLED, rotary encoder, and 24 V heater control.
 
-[Photo of the assembled board]
+This repository contains the complete firmware, a minimal PY32 LL/CMSIS vendor tree, build/flash tooling, and replication notes. It is a port of the original [ATmega-Soldering-Station](https://github.com/wagiminator/ATmega-Soldering-Station) firmware to the PY32F002A.
 
-[![License](https://img.shields.io/badge/license-[LICENSE]-blue)](LICENSE)
-
-## Overview
-
-A compact, open-source digital soldering station controller built around the **Puya PY32F002A** (Cortex-M0+). It reads the T12 thermocouple through an LM358 amplifier, runs a PID loop, and switches the heater with a CDD58N06 MOSFET driven by an MMBT2222A NPN stage. Everything runs from a single 24 V supply.
-
-- Project page: [OSHWLab link](https://oshwlab.com/dhruvgoel3829/project_wyxcfekm)
+- Board project: [OSHWLab](https://oshwlab.com/dhruvgoel3829/project_wyxcfekm)
 - Predecessor: [Solder_Station](https://github.com/Dhruvgoel3829/Solder_Station) (Arduino Nano version)
+- License: [MIT](LICENSE) for this repository; see [CREDITS.md](CREDITS.md) for upstream notices
 
 ## Features
 
-- PID temperature control, 10 Hz loop
-- Temperature range: [200–450 °C]
-- SSD1306 OLED showing set temperature, actual temperature, and heater power
-- Rotary encoder for setting temperature and navigating the menu
-- Sleep / standby with auto-shutoff
-- Tip-change and no-tip detection
-- Calibration offset stored in flash
-- Hand-solderable, with cheap and easy-to-source parts
+- Direct (bang-bang) or PID heater control, selectable from the menu
+- 10 Hz PID loop with anti-windup
+- 12-bit tip ADC with 8-sample averaging
+- Heater is switched off for 950 µs before each tip measurement
+- SSD1306 128x64 OLED over software I2C
+- 1 ms encoder polling with button debounce
+- Boost mode, sleep timer, and automatic off timer
+- Tip-present / no-tip detection
+- Three-point temperature calibration stored in the last flash page
+- Screen flip, encoder reverse, and buzzer options
+- Diagnostic ADC raw-value screen
 
 ## Hardware
 
-| Block | Part / Description |
+| Block | Part / description |
 |---|---|
-| MCU | Puya PY32F002A, running at 5 V |
+| MCU | Puya PY32F002Ax5, 20 KB flash, 3 KB RAM |
 | Input power | 24 V DC, 3 A or higher recommended |
-| 5 V regulator | 78L05 (use SOT-89 or SO-8 for better heat dissipation) |
+| 5 V regulator | 78L05 (use a package with adequate thermal performance) |
 | Heater switch | CDD58N06 N-channel MOSFET |
-| MOSFET driver | MMBT2222A NPN |
+| MOSFET driver | MMBT2222A NPN stage |
 | Thermocouple amplifier | LM358 |
-| Display | SSD1306 OLED, I²C |
+| Display | SSD1306 OLED, 128x64, I2C |
+| User input | Rotary encoder with push button |
+| Tip detection | Reed switch input |
 | Programming | SWD header |
 
-### Heater drive
+The heater gate drive is inverted: the MCU turns the NPN stage on to switch the heater **off**. The firmware accounts for this with `HEATER_ACTIVE_LOW 1` in `firmware/src/main.c`.
 
-The MOSFET gate is pulled up from the 24 V rail for full enhancement. The MMBT2222A pulls the gate low from the 5 V MCU logic, and an 18 V Zener between gate and source clamps Vgs.
+See [hardware/README.md](hardware/README.md) for the full pinout, wiring notes, and safety information.
 
-The gate drive is **inverted**: the MCU turns the BJT on to switch the heater **off**. PWM polarity in the firmware accounts for this.
+## Pinout
 
-> **Safety note:** if the MCU pin is floating or in reset, the BJT is off and the heater can turn on. [Describe how your board handles this, e.g. a base pull-up to 5 V so the heater defaults to off during reset.]
-
-## Firmware
-
-- Language / framework: [C / PY32 HAL / PlatformIO / Keil]
-- PID loop at 10 Hz (100 ms). The heater is switched off for about 10 ms at the end of each cycle, and the thermocouple is sampled after it settles, so switching noise doesn't corrupt the reading. Samples are averaged to reduce noise.
-- Maximum heater duty is about 90%.
-- Anti-windup clamps the integral term.
-
-### Build and flash
-
-```bash
-# 
-```
-
-Flash over SWD using [ST-Link / J-Link / CMSIS-DAP].
-
-## Getting started
-
-1. Order the PCB and parts from the BOM (`/hardware/bom`)
-2. Solder the components
-3. Flash the firmware over SWD
-4. Connect a 24 V supply and a T12 handle
-5. Calibrate against a reference thermometer, then start soldering
+| Pin | Function |
+|---|---|
+| PA0 | VIN divider, ADC channel 0 |
+| PA1 | Heater PWM, TIM1 CH4 |
+| PA2 | OLED SDA |
+| PA3 | OLED SCL |
+| PA4 | T12 thermocouple input, ADC channel 4 |
+| PA5 | Reed switch input, pull-up |
+| PA6 | Encoder DT |
+| PA7 | Encoder CLK |
+| PB0 | Encoder push button |
+| PB1 | Buzzer |
+| PA13 / PA14 | SWDIO / SWCLK |
 
 ## Repository layout
 
-```
-/hardware    schematic, PCB, BOM, gerbers
-/firmware    source code
-/docs        images and notes
+```text
+.
+├── firmware/
+│   ├── src/                 # application source
+│   ├── ld/                  # linker script
+│   └── vendor/              # minimal PY32 LL/CMSIS vendor tree
+├── tools/                   # PyOCD/J-Link flashing and SVD files
+├── hardware/                # hardware overview and pinout
+├── docs/                    # build, operation, replication, troubleshooting
+├── Makefile
+├── rules.mk
+├── LICENSE
+└── README.md
 ```
 
-[Edit to match your repo]
+## Quick start
+
+### 1. Install the toolchain and PyOCD
+
+```bash
+# Debian/Ubuntu example
+sudo apt install make git python3-pip
+# Install the Arm GNU toolchain for arm-none-eabi
+# https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads
+
+pip install pyocd
+```
+
+The Makefile expects `arm-none-eabi-gcc` in `/usr/bin`. Override it if needed:
+
+```bash
+make ARM_TOOLCHAIN=/opt/gcc-arm/bin
+```
+
+### 2. Build
+
+```bash
+make
+```
+
+Build artifacts are written to `Build/`:
+
+- `Build/t12-station.elf`
+- `Build/t12-station.hex`
+- `Build/t12-station.bin`
+
+### 3. Flash
+
+With an ST-Link or CMSIS-DAP probe:
+
+```bash
+make flash
+```
+
+With J-Link:
+
+```bash
+make flash FLASH_PROGRM=jlink
+```
+
+See [docs/BUILD.md](docs/BUILD.md) for probe setup, debugging, and J-Link device-file installation.
+
+## Operation
+
+- Rotate the encoder to change the set temperature.
+- Click the encoder to toggle boost.
+- **Hold the encoder for 500 ms** to open the setup menu.
+- In the menu, rotate to move and click to select.
+- `SAVE & EXIT` writes changed settings to flash.
+
+Full menu and calibration instructions are in [docs/OPERATION.md](docs/OPERATION.md).
+
+## Replication
+
+If you want to build your own unit, start with [docs/REPLICATE.md](docs/REPLICATE.md). It walks through the board, assembly checks, flashing, first power-up, calibration, and a test checklist.
+
+## Known hardware checks
+
+The ADC diagnostic screen (`SETUP MENU → ADC MONITOR`) shows four raw values with the heater forced off:
+
+- `PA4 TIP`
+- `PA0 VIN`
+- `VREF`
+- `TEMP SENS`
+
+If `VREF` and `TEMP SENS` are valid but `PA4 TIP` stays at zero, the ADC and channel switching are working; check the tip-sensor/op-amp path and continuity to PA4. The firmware can only measure the voltage that reaches that pin.
+
+See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for this and other common issues.
 
 ## Safety
 
 - Use a properly rated, isolated 24 V DC supply.
-- The T12 tip heats up in seconds. Always use a stand and never leave the iron unattended.
-- Calibrate temperature readings before relying on them.
+- The T12 tip heats in seconds. Always use a stand and never leave the iron unattended.
+- Verify the heater is off during reset, flashing, and fault conditions.
+- Calibrate the temperature reading before relying on it.
 - You build and use this at your own risk.
 
-## License
+## Credits
 
-[MIT], see [LICENSE](LICENSE).
-
-## Author
-
-Designed by **Dhruv**.
+The control logic is derived from Stefan Wagner's [ATmega-Soldering-Station](https://github.com/wagiminator/ATmega-Soldering-Station), licensed CC BY-SA 3.0. The PY32 build scaffolding was originally based on [IOsetting/py32f0-template](https://github.com/IOsetting/py32f0-template). See [CREDITS.md](CREDITS.md) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
