@@ -1,0 +1,234 @@
+#include "display.h"
+#include "board.h"
+#include "py32f0xx_ll_bus.h"
+#include "py32f0xx_ll_gpio.h"
+#include "py32f0xx_ll_utils.h"
+
+#define SSD1306_ADDR_PRIMARY   0x78
+#define SSD1306_ADDR_SECONDARY 0x7A
+
+static uint8_t frame[DISPLAY_WIDTH * DISPLAY_HEIGHT / 8];
+static uint8_t target_addr = SSD1306_ADDR_PRIMARY;
+
+volatile uint8_t display_ack_primary;
+volatile uint8_t display_ack_secondary;
+volatile uint8_t display_ready;
+volatile uint32_t display_nack_total;
+
+static inline void bus_delay(void)
+{
+  for (volatile uint8_t i = 0; i < 8; i++) __NOP();
+}
+
+#define SCL_HIGH() LL_GPIO_SetOutputPin(DISPLAY_SCL_PORT, DISPLAY_SCL_PIN)
+#define SCL_LOW()  LL_GPIO_ResetOutputPin(DISPLAY_SCL_PORT, DISPLAY_SCL_PIN)
+#define SDA_HIGH() LL_GPIO_SetOutputPin(DISPLAY_SDA_PORT, DISPLAY_SDA_PIN)
+#define SDA_LOW()  LL_GPIO_ResetOutputPin(DISPLAY_SDA_PORT, DISPLAY_SDA_PIN)
+
+static void bus_start(void)
+{
+  SDA_HIGH();
+  SCL_HIGH();
+  bus_delay();
+  SDA_LOW();
+  bus_delay();
+  SCL_LOW();
+}
+
+static void bus_stop(void)
+{
+  SDA_LOW();
+  bus_delay();
+  SCL_HIGH();
+  bus_delay();
+  SDA_HIGH();
+  bus_delay();
+}
+
+static uint8_t bus_write(uint8_t value)
+{
+  for (uint8_t bit = 0; bit < 8; bit++) {
+    if (value & 0x80) SDA_HIGH();
+    else SDA_LOW();
+    bus_delay();
+    SCL_HIGH();
+    bus_delay();
+    SCL_LOW();
+    value <<= 1;
+  }
+
+  SDA_HIGH();
+  bus_delay();
+  SCL_HIGH();
+  bus_delay();
+  uint8_t ack = LL_GPIO_IsInputPinSet(DISPLAY_SDA_PORT, DISPLAY_SDA_PIN) ? 0 : 1;
+  if (!ack) display_nack_total++;
+  SCL_LOW();
+  return ack;
+}
+
+static uint8_t bus_probe(uint8_t address)
+{
+  bus_start();
+  uint8_t ack = bus_write(address);
+  bus_stop();
+  return ack;
+}
+
+static void send_command(uint8_t value)
+{
+  bus_start();
+  bus_write(target_addr);
+  bus_write(0x00);
+  bus_write(value);
+  bus_stop();
+}
+
+static void send_commands(const uint8_t *values, uint8_t count)
+{
+  bus_start();
+  bus_write(target_addr);
+  bus_write(0x00);
+  for (uint8_t i = 0; i < count; i++) bus_write(values[i]);
+  bus_stop();
+}
+
+static void set_window(uint8_t column, uint8_t page)
+{
+  send_command(0xB0 | (page & 0x07));
+  send_command(column & 0x0F);
+  send_command(0x10 | (column >> 4));
+}
+
+static void bus_init(void)
+{
+  LL_IOP_GRP1_EnableClock(LL_IOP_GRP1_PERIPH_GPIOA);
+
+  LL_GPIO_InitTypeDef gpio = {0};
+  gpio.Pin = DISPLAY_SCL_PIN | DISPLAY_SDA_PIN;
+  gpio.Mode = LL_GPIO_MODE_OUTPUT;
+  gpio.OutputType = LL_GPIO_OUTPUT_OPENDRAIN;
+  gpio.Pull = LL_GPIO_PULL_UP;
+  gpio.Speed = LL_GPIO_SPEED_FREQ_HIGH;
+  LL_GPIO_Init(DISPLAY_SCL_PORT, &gpio);
+
+  SCL_HIGH();
+  SDA_HIGH();
+}
+
+void display_init(void)
+{
+  static const uint8_t panel_setup[] = {
+    0xAE, 0xD5, 0x80, 0xA8, 0x3F, 0xD3, 0x00, 0x40,
+    0x8D, 0x14, 0x20, 0x02, 0xA1, 0xC8, 0xDA, 0x12,
+    0x81, 0x7F, 0xD9, 0xF1, 0xDB, 0x40, 0xA4, 0xA6, 0xAF
+  };
+
+  bus_init();
+  LL_mDelay(50);
+
+  display_ack_primary = bus_probe(SSD1306_ADDR_PRIMARY);
+  display_ack_secondary = bus_probe(SSD1306_ADDR_SECONDARY);
+  if (display_ack_primary) {
+    target_addr = SSD1306_ADDR_PRIMARY;
+    display_ready = 1;
+  } else if (display_ack_secondary) {
+    target_addr = SSD1306_ADDR_SECONDARY;
+    display_ready = 1;
+  }
+
+  send_commands(panel_setup, sizeof(panel_setup));
+  LL_mDelay(100);
+  display_clear();
+  display_refresh();
+}
+
+void display_flip(uint8_t flipped)
+{
+  send_command(flipped ? 0xA0 : 0xA1);
+  send_command(flipped ? 0xC0 : 0xC8);
+}
+
+void display_clear(void)
+{
+  for (uint16_t i = 0; i < sizeof(frame); i++) frame[i] = 0;
+}
+
+static void put_pixel(uint8_t x, uint8_t y)
+{
+  if (x >= DISPLAY_WIDTH || y >= DISPLAY_HEIGHT) return;
+  frame[(y >> 3) * DISPLAY_WIDTH + x] |= (uint8_t)(1U << (y & 7));
+}
+
+static void put_block(uint8_t x, uint8_t y, uint8_t width, uint8_t height)
+{
+  for (uint8_t row = 0; row < height; row++)
+    for (uint8_t column = 0; column < width; column++)
+      put_pixel(x + column, y + row);
+}
+
+void display_refresh(void)
+{
+  for (uint8_t page = 0; page < 8; page++) {
+    set_window(0, page);
+    bus_start();
+    bus_write(target_addr);
+    bus_write(0x40);
+    for (uint8_t column = 0; column < DISPLAY_WIDTH; column++)
+      bus_write(frame[page * DISPLAY_WIDTH + column]);
+    bus_stop();
+  }
+}
+
+static const uint8_t glyphs[][5] = {
+  {0x00,0x00,0x00,0x00,0x00},{0x00,0x00,0x5F,0x00,0x00},{0x00,0x07,0x00,0x07,0x00},{0x14,0x7F,0x14,0x7F,0x14},
+  {0x24,0x2A,0x7F,0x2A,0x12},{0x23,0x13,0x08,0x64,0x62},{0x36,0x49,0x55,0x22,0x50},{0x00,0x05,0x03,0x00,0x00},
+  {0x00,0x1C,0x22,0x41,0x00},{0x00,0x41,0x22,0x1C,0x00},{0x14,0x08,0x3E,0x08,0x14},{0x08,0x08,0x3E,0x08,0x08},
+  {0x00,0x50,0x30,0x00,0x00},{0x08,0x08,0x08,0x08,0x08},{0x00,0x60,0x60,0x00,0x00},{0x20,0x10,0x08,0x04,0x02},
+  {0x3E,0x51,0x49,0x45,0x3E},{0x00,0x42,0x7F,0x40,0x00},{0x42,0x61,0x51,0x49,0x46},{0x21,0x41,0x45,0x4B,0x31},
+  {0x18,0x14,0x12,0x7F,0x10},{0x27,0x45,0x45,0x45,0x39},{0x3C,0x4A,0x49,0x49,0x30},{0x01,0x71,0x09,0x05,0x03},
+  {0x36,0x49,0x49,0x49,0x36},{0x06,0x49,0x49,0x29,0x1E},{0x00,0x36,0x36,0x00,0x00},{0x00,0x56,0x36,0x00,0x00},
+  {0x08,0x14,0x22,0x41,0x00},{0x14,0x14,0x14,0x14,0x14},{0x00,0x41,0x22,0x14,0x08},{0x02,0x01,0x51,0x09,0x06},
+  {0x32,0x49,0x79,0x41,0x3E},{0x7E,0x11,0x11,0x11,0x7E},{0x7F,0x49,0x49,0x49,0x36},{0x3E,0x41,0x41,0x41,0x22},
+  {0x7F,0x41,0x41,0x22,0x1C},{0x7F,0x49,0x49,0x49,0x41},{0x7F,0x09,0x09,0x09,0x01},{0x3E,0x41,0x49,0x49,0x7A},
+  {0x7F,0x08,0x08,0x08,0x7F},{0x00,0x41,0x7F,0x41,0x00},{0x20,0x40,0x41,0x3F,0x01},{0x7F,0x08,0x14,0x22,0x41},
+  {0x7F,0x40,0x40,0x40,0x40},{0x7F,0x02,0x0C,0x02,0x7F},{0x7F,0x04,0x08,0x10,0x7F},{0x3E,0x41,0x41,0x41,0x3E},
+  {0x7F,0x09,0x09,0x09,0x06},{0x3E,0x41,0x51,0x21,0x5E},{0x7F,0x09,0x19,0x29,0x46},{0x46,0x49,0x49,0x49,0x31},
+  {0x01,0x01,0x7F,0x01,0x01},{0x3F,0x40,0x40,0x40,0x3F},{0x1F,0x20,0x40,0x20,0x1F},{0x3F,0x40,0x38,0x40,0x3F},
+  {0x63,0x14,0x08,0x14,0x63},{0x07,0x08,0x70,0x08,0x07},{0x61,0x51,0x49,0x45,0x43}
+};
+
+static uint8_t glyph_index(char value)
+{
+  if (value >= 'a' && value <= 'z') value -= 32;
+  if (value < 0x20 || value > 0x5A) value = '?';
+  return (uint8_t)(value - 0x20);
+}
+
+uint8_t display_text_width(const char *text, uint8_t scale)
+{
+  uint8_t length = 0;
+  while (*text++) length++;
+  return (uint8_t)(length * 6 * scale);
+}
+
+void display_text(uint8_t x, uint8_t y, const char *text, uint8_t scale)
+{
+  while (*text) {
+    uint8_t index = glyph_index(*text++);
+    for (uint8_t column = 0; column < 5; column++) {
+      uint8_t bits = glyphs[index][column];
+      for (uint8_t row = 0; row < 7; row++) {
+        if (bits & (1U << row))
+          put_block(x + column * scale, y + row * scale, scale, scale);
+      }
+    }
+    x += 6 * scale;
+  }
+}
+
+void display_text_center(uint8_t y, const char *text, uint8_t scale)
+{
+  uint8_t width = display_text_width(text, scale);
+  display_text((DISPLAY_WIDTH - width) / 2, y, text, scale);
+}

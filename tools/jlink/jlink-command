@@ -1,0 +1,4 @@
+erase
+loadfile Build/t12-station.hex 0 noreset
+reset
+exit
